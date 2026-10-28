@@ -1,0 +1,235 @@
+openapi: 3.0.3
+info:
+  title: Payment Ledger API
+  description: >-
+    Payment ledger with double-entry bookkeeping. Every transfer posts
+    exactly two entries (one DEBIT, one CREDIT) for the same amount in
+    minor units, in a single database transaction. Balances are computed
+    from ledger entries, never stored as a mutable column. The live
+    contract is also served by the running application at /v3/api-docs,
+    with interactive docs at /swagger-ui.html.
+  version: 0.1.0
+servers:
+  - url: http://localhost:8080
+paths:
+  /accounts:
+    post:
+      summary: Create an account
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateAccountRequest'
+      responses:
+        '201':
+          description: Account created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountResponse'
+        '400':
+          description: Validation error
+  /accounts/{id}:
+    get:
+      summary: Get an account, with its ledger-derived balance
+      parameters:
+        - $ref: '#/components/parameters/AccountId'
+      responses:
+        '200':
+          description: Account found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountResponse'
+        '404':
+          description: Account not found
+  /accounts/{id}/entries:
+    get:
+      summary: List the ledger entries for an account, in posting order
+      parameters:
+        - $ref: '#/components/parameters/AccountId'
+      responses:
+        '200':
+          description: Ledger entries
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/LedgerEntryResponse'
+        '404':
+          description: Account not found
+  /transfers:
+    post:
+      summary: Create an idempotent double-entry transfer
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema:
+            type: string
+          description: >-
+            Client-generated unique key for this transfer attempt. Replaying
+            the same key with the same payload returns the original
+            transfer; reusing the key with a different payload returns 409.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTransferRequest'
+      responses:
+        '201':
+          description: Transfer created (or, for a replay, the original transfer)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransferResponse'
+        '400':
+          description: Validation error, self-transfer, inactive account, or currency mismatch
+        '404':
+          description: Account not found
+        '409':
+          description: Idempotency-Key reused with a different payload
+        '422':
+          description: Sender has insufficient funds
+  /transfers/{id}:
+    get:
+      summary: Get a transfer by id
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Transfer found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransferResponse'
+        '404':
+          description: Transfer not found
+components:
+  parameters:
+    AccountId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+  schemas:
+    CreateAccountRequest:
+      type: object
+      required: [owner, currency]
+      properties:
+        owner:
+          type: string
+          example: Alya
+        currency:
+          type: string
+          pattern: '[A-Z]{3}'
+          example: IDR
+        initialBalanceMinor:
+          type: integer
+          format: int64
+          minimum: 0
+          description: >-
+            Optional opening balance in minor units. When greater than
+            zero it is posted as a balanced pair (CREDIT on an external
+            account, DEBIT on the new account), so a new account can
+            actually send a transfer without a one-sided entry.
+          example: 500000
+    AccountResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        owner:
+          type: string
+        currency:
+          type: string
+          example: IDR
+        status:
+          type: string
+          enum: [ACTIVE, CLOSED]
+        balanceMinor:
+          type: integer
+          format: int64
+          description: Balance in minor units, computed from ledger entries
+        createdAt:
+          type: string
+          format: date-time
+    CreateTransferRequest:
+      type: object
+      required: [fromAccountId, toAccountId, amountMinor, currency]
+      properties:
+        fromAccountId:
+          type: string
+          format: uuid
+        toAccountId:
+          type: string
+          format: uuid
+        amountMinor:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Amount in minor units, never a float
+          example: 100000
+        currency:
+          type: string
+          pattern: '[A-Z]{3}'
+          example: IDR
+    TransferResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        fromAccountId:
+          type: string
+          format: uuid
+        toAccountId:
+          type: string
+          format: uuid
+        amountMinor:
+          type: integer
+          format: int64
+        currency:
+          type: string
+        status:
+          type: string
+          enum: [COMPLETED]
+        idempotencyKey:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+    LedgerEntryResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        transferId:
+          type: string
+          format: uuid
+        accountId:
+          type: string
+          format: uuid
+        type:
+          type: string
+          enum: [DEBIT, CREDIT]
+        amountMinor:
+          type: integer
+          format: int64
+        currency:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
